@@ -11,7 +11,7 @@ TransmissionType = car.CarParams.TransmissionType
 NetworkLocation = car.CarParams.NetworkLocation
 GearShifter = car.CarState.GearShifter
 STANDSTILL_THRESHOLD = 10 * 0.0311 * CV.KPH_TO_MS
-
+TIRE_SIZE_CORRECTION = 1.04
 
 class CarState(CarStateBase):
   def __init__(self, CP, FPCP):
@@ -73,6 +73,14 @@ class CarState(CarStateBase):
       pt_cp.vl["EBCMWheelSpdRear"]["RLWheelSpd"],
       pt_cp.vl["EBCMWheelSpdRear"]["RRWheelSpd"],
     )
+
+    # Apply tire size correction to raw wheel speeds
+    ret.wheelSpeeds.fl *= TIRE_SIZE_CORRECTION
+    ret.wheelSpeeds.fr *= TIRE_SIZE_CORRECTION
+    ret.wheelSpeeds.rl *= TIRE_SIZE_CORRECTION
+    ret.wheelSpeeds.rr *= TIRE_SIZE_CORRECTION
+
+
     ret.vEgoRaw = mean([ret.wheelSpeeds.fl, ret.wheelSpeeds.fr, ret.wheelSpeeds.rl, ret.wheelSpeeds.rr])
     ret.vEgo, ret.aEgo = self.update_speed_kf(ret.vEgoRaw)
     # sample rear wheel speeds, standstill=True if ECM allows engagement with brake
