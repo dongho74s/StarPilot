@@ -313,6 +313,8 @@ class LongitudinalMpc:
     # Initialize acceleration limits to prevent AttributeError
     self.cruise_min_a = ACCEL_MIN
     self.max_a = 1.2  # Default max acceleration
+    # Lead speed matching: smooth transition for cruise_obstacle factor
+    self.cruise_obstacle_factor = 1.0  # 1.0 = normal, higher = less cruise pull
     self.reset()
 
   def reset(self):
@@ -495,9 +497,8 @@ class LongitudinalMpc:
       a_lead_tau = LEAD_ACCEL_TAU
 
     # MPC will not converge if immediate crash is expected
-    # Clip lead distance to what is still possible to brake for using the current decel limit
-    decel_capable = max(-self.cruise_min_a, 0.1)
-    min_x_lead = ((v_ego + v_lead)/2) * (v_ego - v_lead) / (decel_capable * 2)
+    # Clip lead distance to what is still possible to brake for
+    min_x_lead = ((v_ego + v_lead)/2) * (v_ego - v_lead) / (-ACCEL_MIN * 2)
     x_lead = clip(x_lead, min_x_lead, 1e8)
     v_lead = clip(v_lead, 0.0, 1e8)
     a_lead = clip(a_lead, -10., 5.)
@@ -515,7 +516,7 @@ class LongitudinalMpc:
     self.cruise_min_a = min_a
     self.max_a = max_a
 
-  def update(self, lead_one, lead_two, v_cruise, x, v, a, j, t_follow, tracking_lead, personality=log.LongitudinalPersonality.standard):
+  def update(self, lead_one, lead_two, v_cruise, x, v, a, j, t_follow, tracking_lead, personality=log.LongitudinalPersonality.standard, stable_lead=False):
     v_ego = self.x0[1]
     self.status = lead_one.status and tracking_lead or lead_two.status
 
@@ -528,7 +529,7 @@ class LongitudinalMpc:
     lead_0_obstacle = lead_xv_0[:,0] + get_stopped_equivalence_factor(lead_xv_0[:,1])
     lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1])
 
-    self.params[:,0] = self.cruise_min_a
+    self.params[:,0] = ACCEL_MIN
     # negative accel constraint causes problems because negative speed is not allowed
     self.params[:,1] = max(0.0, self.max_a)
 
@@ -545,6 +546,20 @@ class LongitudinalMpc:
                                  v_lower,
                                  v_upper)
       cruise_obstacle = np.cumsum(T_DIFFS * v_cruise_clipped) + get_safe_obstacle_distance(v_cruise_clipped, t_follow)
+
+      # Lead Speed Matching: When stably following a lead (distance maintained),
+      # push cruise_obstacle further away to reduce the "pull" toward set speed.
+      # This prevents oscillation between lead following and cruise acceleration.
+      # Use smooth transition to avoid abrupt changes.
+      target_factor = 1.5 if (stable_lead and tracking_lead) else 1.0
+      # Slew rate: ~0.5 per second for smooth transition (takes ~1s to reach target)
+      max_change = 0.5 * self.dt
+      if self.cruise_obstacle_factor < target_factor:
+        self.cruise_obstacle_factor = min(self.cruise_obstacle_factor + max_change, target_factor)
+      else:
+        self.cruise_obstacle_factor = max(self.cruise_obstacle_factor - max_change, target_factor)
+      cruise_obstacle = cruise_obstacle * self.cruise_obstacle_factor
+
       x_obstacles = np.column_stack([lead_0_obstacle, lead_1_obstacle, cruise_obstacle])
       self.source = SOURCES[np.argmin(x_obstacles[0])]
 
